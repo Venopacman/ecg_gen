@@ -1,9 +1,69 @@
 import random
+
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence, PackedSequence
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence, PackedSequence
+
+
+class SequenceWise(nn.Module):
+    def __init__(self, module):
+        """
+        Get from https://github.com/SeanNaren/deepspeech.pytorch/blob/master/model.py
+        Collapses input of dim T*N*H to (T*N)*H, and applies to a module.
+        Allows handling of variable sequence lengths and minibatch sizes.
+        :param module: Module to apply input to.
+        """
+        super(SequenceWise, self).__init__()
+        self.module = module
+
+    def forward(self, x):
+        t, n = x.size(0), x.size(1)
+        x = x.view(t * n, -1)
+        x = self.module(x)
+        x = x.view(t, n, -1)
+        return x
+
+    def __repr__(self):
+        tmpstr = self.__class__.__name__ + ' (\n'
+        tmpstr += self.module.__repr__()
+        tmpstr += ')'
+        return tmpstr
+
+
+class MaskConv(nn.Module):
+    def __init__(self, seq_module, device):
+        """
+        Adds padding to the output of the module based on the given lengths. This is to ensure that the
+        results of the model do not change when batch sizes change during inference.
+        Input needs to be in the shape of (BxCxD)
+        :param seq_module: The sequential module containing the conv stack.
+        """
+        super(MaskConv, self).__init__()
+        self.seq_module = seq_module
+        self.device = device
+
+    def forward(self, x, lengths):
+        """
+        :param x: The input of size BxCxD
+        :param lengths: The actual length of each sequence in the batch
+        :return: Masked output from the module
+        """
+        for module in self.seq_module:
+            x = module(x)
+            # print(x.shape)
+            mask = torch.ByteTensor(x.size()).fill_(0).to(self.device)
+            # print(mask.shape)
+            # if x.is_cuda:
+            # mask = mask
+            for i, length in enumerate(lengths):
+                # length = length.item()
+                if (mask[i].size(1) - length) > 0:
+                    mask[i].narrow(1, length, mask[i].size(1) - length).fill_(1)
+            x = x.masked_fill(mask, 0)
+        return x, lengths
+
 
 class Generator(nn.Module):
     def __init__(self, labels_dim, hidden_dim, latent_dim,
@@ -47,7 +107,13 @@ class Generator(nn.Module):
                             bidirectional=self.bidirectional,
                             ).to(self.device)
         # Define our decoder layer
-        self.decoder = nn.Linear(self.hidden_dim * self.lstm_output_mult, self.decoder_output_dim).to(self.device)
+        fully_connected = nn.Sequential(
+            # nn.BatchNorm1d(self.hidden_dim * self.lstm_output_mult),
+            nn.LeakyReLU(),
+            nn.Linear(self.hidden_dim * self.lstm_output_mult, self.decoder_output_dim, bias=False)
+        )
+        self.decoder = fully_connected.to(self.device)
+        # self.decoder = nn.Linear(self.hidden_dim * self.lstm_output_mult, self.decoder_output_dim).to(self.device)
 
     def init_hidden(self):
         return tuple([torch.zeros((self.num_layers, self.batch_size, self.hidden_dim),
@@ -63,8 +129,9 @@ class Generator(nn.Module):
         raw_output, _hidden = self.lstm(input_combined, _hidden)
         if isinstance(raw_output, PackedSequence):
             raw_output, lengths = pad_packed_sequence(raw_output, batch_first=self.batch_first)
+        # print(f"[Generator] shape of vector for fc layer {raw_output.shape}")
         decoded_output = self.decoder(raw_output)
-        decoded_output = F.sigmoid(decoded_output)
+        decoded_output = torch.tanh(decoded_output)
         return decoded_output, _hidden
 
     def get_nllt_list(self, size):
@@ -153,20 +220,87 @@ class Discriminator(nn.Module):
         if _hidden is None:
             _hidden = self.init_hidden()
 
-        #         if _category:
-        #             input_combined = torch.cat((_category, _input), 2)
-        #         else:
-        #             input_combined = _input
-
         encoder_input, lengths = pad_packed_sequence(_input, batch_first=self.batch_first)
-
         encoded_output = self.encoder(encoder_input)
-
         packed_encoded_output = pack_padded_sequence(encoded_output, lengths, batch_first=self.batch_first)
-
         rnn_output, _hidden = self.lstm(packed_encoded_output, _hidden)
         if isinstance(rnn_output, PackedSequence):
             rnn_output, lengths = pad_packed_sequence(rnn_output, batch_first=self.batch_first)
-
         decoded_output = self.decoder(rnn_output)
         return decoded_output, lengths
+
+
+class CNNDiscriminator(nn.Module):
+    def __init__(self,
+                 input_dim,
+                 labels_dim,
+                 device='cpu'):
+        super(CNNDiscriminator, self).__init__()
+        self.input_dim = input_dim
+        self.labels_dim = labels_dim
+        self.device = device
+
+        # depthwise convolution with dilation
+        self.conv = MaskConv(nn.Sequential(
+            nn.Conv1d(self.input_dim,
+                      self.input_dim * 2,
+                      kernel_size=4,
+                      stride=1,
+                      padding=2,
+                      groups=self.input_dim,
+                      dilation=2),
+            # nn.BatchNorm1d(self.input_dim * 2),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Conv1d(self.input_dim * 2,
+                      self.input_dim * 4,
+                      kernel_size=4,
+                      stride=1,
+                      padding=2,
+                      groups=self.input_dim,
+                      dilation=2),
+            # nn.BatchNorm1d(self.input_dim * 4),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Conv1d(self.input_dim * 4,
+                      self.input_dim * 4,
+                      kernel_size=4,
+                      stride=1,
+                      padding=2,
+                      groups=self.input_dim,
+                      dilation=2),
+            # nn.BatchNorm1d(self.input_dim * 4),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Conv1d(self.input_dim * 4,
+                      self.input_dim * 6,
+                      kernel_size=4,
+                      stride=1,
+                      padding=2,
+                      groups=self.input_dim,
+                      dilation=2),
+            # nn.BatchNorm1d(self.input_dim * 4),
+            nn.MaxPool1d(kernel_size=2)
+        ).to(self.device), self.device)
+        fc_input_size = self.input_dim * 6
+        # print(fc_input_size)
+        fully_connected = nn.Sequential(
+            nn.LeakyReLU(),
+            nn.Linear(fc_input_size, 1),
+        )
+        # self.fc = nn.Sequential(SequenceWise(fully_connected)).to(self.device)
+        self.fc = nn.Sequential(SequenceWise(fully_connected)).to(self.device)
+
+    def forward(self, x, lengths):
+        # print(f"x init shape: {x.shape}")
+        if isinstance(x, PackedSequence):
+            x, lengths = pad_packed_sequence(x, batch_first=True)
+        # x =
+        x = x.view(x.size(0), x.size(2), x.size(1))
+        # print(f"x shape after reshape: {x.shape}")
+        x, lengths = self.conv(x, lengths)
+        # print(f"x lengths after conv {lengths}")
+        # print(f"x shape after conv: {x.shape}")
+        x = x.view(x.size(0), x.size(2), x.size(1))
+        # print(f"x shape after conv and reshape: {x.shape}")
+        x = self.fc(x)
+        x = torch.sigmoid(x)
+        # print(x.shape, lengths)
+        return x, lengths
