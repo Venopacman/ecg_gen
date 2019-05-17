@@ -7,10 +7,13 @@ from torch.utils.data import Dataset
 
 
 class ECGDataset(Dataset):
-    def __init__(self, patients_dict: dict, labels_filepath: str, transform_strategy='cut'):
+    def __init__(self, patients_dict: dict, labels_filepath: str, transform_strategy='cut', device='cpu', seq_len=500):
+        self.device = device
         self.transform_strategy = transform_strategy
         self.labels_filepath = labels_filepath
         self.dataset = self.get_pairset(patients_dict)
+        self.seq_len = seq_len
+        
 
     def __len__(self):
         return len(self.dataset)
@@ -23,13 +26,17 @@ class ECGDataset(Dataset):
 
     def get_pairset(self, patients_dict: dict):
         labels_df = self.parse_labels_file()
-        return [(torch.Tensor(patients_dict[f"{patient}"].T),
-                 torch.Tensor(labels_df.loc[patient].values.astype(bool).astype(int).astype(float)))
+        return [(torch.Tensor(patients_dict[f"{patient}"].T).to(self.device),
+                 torch.Tensor(labels_df.loc[patient].values.astype(bool).astype(int).astype(float)).to(self.device))
                 for patient in labels_df.index]
 
     def transform(self, sample):
-        # TODO 1st make cut transform_strategy
-        return sample
+        seq, label = sample
+        if self.transform_strategy == "cut":
+            """ then we need to make a crop of seq_len elements size """
+            if seq.size(0) >= self.seq_len:
+                seq = seq.unfold(0,self.seq_len, self.seq_len)[0].transpose(1,0)
+        return (seq, label)
 
     def parse_labels_file(self):
         return pd.read_csv(self.labels_filepath, header=0).set_index('patient')

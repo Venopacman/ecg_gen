@@ -12,7 +12,7 @@ from torch.nn.utils.rnn import pack_padded_sequence
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from utils.data import ECGDataset, pad_batch_sequence, save_ecg_example
-from utils.models import Generator, Discriminator
+from utils.models import Generator, Discriminator, CNNDiscriminator
 
 
 def get_argument_parser():
@@ -32,20 +32,20 @@ def get_argument_parser():
     parser.add_argument("--real_labels",
                         help="Path to .csv file with diagnosis labels from prepare_data script",
                         type=str)
-    parser.add_argument("--labels_dim", default=7)
-    parser.add_argument("--lead_n", default=12)
+    parser.add_argument("--labels_dim", default=7, type=int)
+    parser.add_argument("--lead_n", default=12, type=int)
     # general params
     parser.add_argument("--device",
                         default=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-    parser.add_argument("--n_epochs", default=100)
-    parser.add_argument("--batch_size", default=24)
-    parser.add_argument("--lr", default=1e-4)
+    parser.add_argument("--n_epochs", default=100, type=int)
+    parser.add_argument("--batch_size", default=24, type=int)
+    parser.add_argument("--lr", default=1e-4, type=float)
     # generator params
-    parser.add_argument("--gen_h_dim", default=128)
-    parser.add_argument("--gen_l_dim", default=100)
+    parser.add_argument("--gen_h_dim", default=128, type=int)
+    parser.add_argument("--gen_l_dim", default=100, type=int)
     # discriminator params
-    parser.add_argument("--dis_h_dim", default=128)
-    parser.add_argument("--dis_encoder_h_dim", default=128)
+    parser.add_argument("--dis_h_dim", default=128, type=int)
+    parser.add_argument("--dis_encoder_h_dim", default=128, type=int)
     return parser
 
 
@@ -77,13 +77,9 @@ if __name__ == "__main__":
                   device=args.device,
                   decoder_output_dim=args.lead_n,
                   dataset_for_labels=real_dataset)
-    D = Discriminator(input_dim=args.lead_n,
-                      labels_dim=args.labels_dim,
-                      hidden_dim=args.dis_h_dim,
-                      encoder_dim=args.dis_encoder_h_dim,
-                      decoder_dim=1,
-                      batch_size=args.batch_size,
-                      device=args.device)
+    D = CNNDiscriminator(input_dim=args.lead_n + args.labels_dim,
+                         labels_dim=args.labels_dim,
+                         device=args.device)
 
     G_optimizer = optim.Adam(G.parameters(), lr=args.lr)
     D_optimizer = optim.Adam(D.parameters(), lr=args.lr)
@@ -99,15 +95,15 @@ if __name__ == "__main__":
             # Let's prepare our fake and real samples
             # concat labels + sequence alongside
             fake_label_seq_padded_batch = torch.cat([fake_labels_padded_batch, fake_seq_padded_batch], 2)
-            fake_packed_batch = pack_padded_sequence(fake_label_seq_padded_batch, fake_lengths, batch_first=True)
+            # fake_packed_batch = pack_padded_sequence(fake_label_seq_padded_batch, fake_lengths, batch_first=True)
             # and the same for real ones
             real_label_seq_padded_batch = torch.cat([real_labels, real_seqs], 2)
-            real_packed_batch = pack_padded_sequence(real_label_seq_padded_batch, real_lengths, batch_first=True)
+            # real_packed_batch = pack_padded_sequence(real_label_seq_padded_batch, real_lengths, batch_first=True)
             # After that we can make predictions for our fake examples
-            d_fake_predictions, _ = D(fake_packed_batch)
+            d_fake_predictions, _ = D(fake_label_seq_padded_batch, fake_lengths)
             d_fake_target = torch.zeros_like(d_fake_predictions)
             # ... and real ones
-            d_real_predictions, real_pred_lengths = D(real_packed_batch.to(args.device))
+            d_real_predictions, real_pred_lengths = D(real_label_seq_padded_batch.to(args.device), real_lengths)
             d_real_target = torch.ones_like(d_real_predictions)
             # Now we can calculate loss for discriminator
             # TODO Need to make sure that sequence with vary length is ok for calc loss
@@ -126,9 +122,9 @@ if __name__ == "__main__":
             fake_seq_padded_batch, fake_lengths, fake_labels_padded_batch = G.generate_seq_batch()
             # concat labels + sequence alongside
             fake_label_seq_padded_batch = torch.cat([fake_labels_padded_batch, fake_seq_padded_batch], 2)
-            fake_packed_batch = pack_padded_sequence(fake_label_seq_padded_batch, fake_lengths, batch_first=True)
+            # fake_packed_batch = pack_padded_sequence(fake_label_seq_padded_batch, fake_lengths, batch_first=True)
             # After that we can make predictions for our fake examples
-            d_fake_predictions, _ = D(fake_packed_batch)
+            d_fake_predictions, _ = D(fake_label_seq_padded_batch, fake_lengths)
             g_target = torch.ones_like(d_fake_predictions)
             # Now we can calculate loss for generator
             g_loss = criterion(d_fake_predictions, g_target)
