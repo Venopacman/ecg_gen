@@ -14,7 +14,6 @@ class ECGDataset(Dataset):
         self.dataset = self.get_pairset(patients_dict)
         self.seq_len = seq_len
         
-
     def __len__(self):
         return len(self.dataset)
 
@@ -35,7 +34,7 @@ class ECGDataset(Dataset):
         if self.transform_strategy == "cut":
             """ then we need to make a crop of seq_len elements size """
             if seq.size(0) >= self.seq_len:
-                seq = seq.unfold(0,self.seq_len, self.seq_len)[0].transpose(1,0)
+                seq = seq.unfold(0, self.seq_len, self.seq_len)[0].transpose(1, 0)
         return (seq, label)
 
     def parse_labels_file(self):
@@ -47,7 +46,6 @@ def pad_batch_sequence(batch):
     sequences = [x[0] for x in sorted_batch]
     sequences_padded = pad_sequence(sequences, batch_first=True)
     lengths = [len(x) for x in sequences]
-    # Don't forget to grab the labels of the *sorted* batch
     labels = [x[1].unsqueeze(0).expand(len(x[0]), -1) for x in sorted_batch]
     labels_padded = pad_sequence(labels, batch_first=True)
     return sequences_padded, lengths, labels_padded

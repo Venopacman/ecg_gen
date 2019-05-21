@@ -90,10 +90,40 @@ if __name__ == "__main__":
                        label_size=args.labels_dim, 
                        hidden_size=args.dis_h_dim, 
                        device=args.device)
-
+    
     G_optimizer = optim.Adam(G.parameters(), lr=args.lr)
     D_optimizer = optim.Adam(D.parameters(), lr=args.lr)
-
+    
+    """-----------------------Hot-Start-step--------------------------"""
+    # get fixed bath for hot-start
+    fixed_seqs, fixed_labels = [it for it in real_data_loader][0]
+    fixed_seqs = fixed_seqs.to(args.device)
+    fixed_labels = fixed_labels.to(args.device)
+    # then we need to try learn shape of our signal
+    loss = nn.MSELoss()
+    for prem_epoch in tqdm.tqdm(range(10000)):
+        noise = torch.rand(args.batch_size, args.gen_l_dim, device=args.device)
+        fake_seq = G(noise, fixed_labels)
+        output = loss(fake_seq, fixed_seqs)
+        tb_writer.add_scalar("D_hot_start_mse_loss", output.item(), global_step=prem_epoch)
+        output.backward()
+        G_optimizer.step()
+        G_optimizer.zero_grad()
+    torch.save({
+#                 'epoch': epoch,
+                "d_model": D,
+#                 "d_loss": d_loss,
+                "d_optimizer": D_optimizer,
+                "g_model": G,
+#                 "g_loss": g_loss,
+                "g_optimizer": G_optimizer,
+            }, os.path.join(args.out_dir, f"models/{args.model_name}_after_hot_start_checkpoint.pkl"))
+    with torch.no_grad():
+        noise = torch.rand(args.batch_size, args.gen_l_dim, device=args.device)
+        fake_seq = G(noise, fixed_labels)
+        _seq = fake_seq[0].cpu().numpy()  # batch_first :^)
+        fig = save_ecg_example(_seq, f"{args.model_name}_epoch_0_example")
+        tb_writer.add_figure("generated_example", fig, global_step=0)
     # train loop
     for epoch in tqdm.tqdm(range(args.n_epochs), position=0):
         # sequences in true_data_loader already padded thanks to pad_batch_sequence function
@@ -123,6 +153,7 @@ if __name__ == "__main__":
             D_optimizer.zero_grad()
             G.zero_grad()
             """ ---------------------------- Generator step ---------------------------------------------"""
+#             for _ in range(5):
             # Generate fake sample
             noise = torch.rand(args.batch_size, args.gen_l_dim, device=args.device)
             fake_seq = G(noise, real_labels)
@@ -139,7 +170,7 @@ if __name__ == "__main__":
             G_optimizer.zero_grad()
             D.zero_grad()
         # plot example and save checkpoint each odd epoch
-        if epoch % 250 == 249:
+        if epoch % 50 == 49:
             print(f"Epoch-{epoch}; D_loss: {d_loss.data.cpu().numpy()}; G_loss: {g_loss.data.cpu().numpy()}")
             torch.save({
                 'epoch': epoch,

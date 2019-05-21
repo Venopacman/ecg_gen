@@ -12,7 +12,7 @@ from torch.nn.utils.rnn import pack_padded_sequence
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from utils.data import ECGDataset, pad_batch_sequence, save_ecg_example
-from utils.models import DenseGenerator, ConvCritic
+from utils.models import InverseCNNGenerator, ConvCritic
 
 
 def get_argument_parser():
@@ -65,11 +65,6 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(123)
     torch.manual_seed(123)
     # load our real examples
-    real_data_dict = pickle.load(open(args.real_dataset, 'rb'))
-    real_dataset = ECGDataset(real_data_dict, args.real_labels, seq_len=args.seq_len)
-    # loss and data loader setup
-    criterion = nn.BCELoss()
-    real_data_loader = DataLoader(real_dataset, batch_size=args.batch_size, drop_last=True, shuffle=True)
     # init GAN models
     if args.continue_from:
         G = torch.load(open(args.continue_from, "rb"), map_location=args.device)['g_model']
@@ -78,21 +73,65 @@ if __name__ == "__main__":
         D = torch.load(open(args.continue_from, "rb"), map_location=args.device)['d_model']
         D.device = args.device
     else:
-        G = DenseGenerator(noise_size=args.gen_l_dim,
-                           label_size=args.labels_dim,
-                           output_size=args.seq_len,
-                           hidden_size=args.gen_h_dim,
-                           n_lead=args.lead_n,
-                           device=args.device)
-
-        D = ConvCritic(input_size=args.seq_len, 
+        G = InverseCNNGenerator(input_size=args.gen_l_dim, 
+                        label_size=args.labels_dim,
+                        lead_n=args.lead_n, 
+                        hidden_size=args.gen_h_dim, 
+                        stride=1,
+                        padding=2,
+                        dilation=2,
+                        kernel_size=7,
+                        out_padding=1,
+                        device=args.device
+                       )
+        noise = torch.rand(8, args.gen_l_dim, device=args.device)
+        labels = torch.randint(0,1,(8, args.labels_dim), device=args.device).float()
+        result = G(noise=noise, label=labels)
+        true_seq_len = result.size(1)
+        D = ConvCritic(input_size=true_seq_len,
                        leads_n=args.lead_n, 
                        label_size=args.labels_dim, 
                        hidden_size=args.dis_h_dim, 
                        device=args.device)
 
+    real_data_dict = pickle.load(open(args.real_dataset, 'rb'))
+    real_dataset = ECGDataset(real_data_dict, args.real_labels, seq_len=true_seq_len)
+    # loss and data loader setup
+    criterion = nn.BCELoss()
+    real_data_loader = DataLoader(real_dataset, batch_size=args.batch_size, drop_last=True, shuffle=True)
+
     G_optimizer = optim.Adam(G.parameters(), lr=args.lr)
     D_optimizer = optim.Adam(D.parameters(), lr=args.lr)
+    
+    # get fixed bath for hot-start
+    fixed_seqs, fixed_labels = [it for it in real_data_loader][0]
+    fixed_seqs = fixed_seqs.to(args.device)
+    fixed_labels = fixed_labels.to(args.device)
+    # then we need to try learn shape of our signal
+    loss = nn.MSELoss()
+    for prem_epoch in tqdm.tqdm(range(10000)):
+        noise = torch.rand(args.batch_size, args.gen_l_dim, device=args.device)
+        fake_seq = G(noise, fixed_labels)
+        output = loss(fake_seq, fixed_seqs)
+        tb_writer.add_scalar("D_hot_start_mse_loss", output.item(), global_step=prem_epoch)
+        output.backward()
+        G_optimizer.step()
+        G_optimizer.zero_grad()
+    torch.save({
+#                 'epoch': epoch,
+                "d_model": D,
+#                 "d_loss": d_loss,
+                "d_optimizer": D_optimizer,
+                "g_model": G,
+#                 "g_loss": g_loss,
+                "g_optimizer": G_optimizer,
+            }, os.path.join(args.out_dir, f"models/{args.model_name}_after_hot_start_checkpoint.pkl"))
+    with torch.no_grad():
+        noise = torch.rand(args.batch_size, args.gen_l_dim, device=args.device)
+        fake_seq = G(noise, fixed_labels)
+        _seq = fake_seq[0].cpu().numpy()  # batch_first :^)
+        fig = save_ecg_example(_seq, f"{args.model_name}_epoch_0_example")
+        tb_writer.add_figure("generated_example", fig, global_step=0)
 
     # train loop
     for epoch in tqdm.tqdm(range(args.n_epochs), position=0):

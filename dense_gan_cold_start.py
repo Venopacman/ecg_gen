@@ -1,5 +1,3 @@
-#  key concept - sygnal normalization
-#         curr_lead_data = data_dict[patient][lead_n, :]/np.abs(data_dict[patient][lead_n, :]).max()
 import os
 import pickle
 from argparse import ArgumentParser
@@ -24,7 +22,7 @@ def get_argument_parser():
                              "and tensorboard logs will be stored",
                         type=str,
                         default="./out")
-    parser.add_argument("--model_name", default="dense_gan_cold_start")
+    parser.add_argument("--model_name", default="dense_vs_dense_gan_cold_start")
     # dataset params
     parser.add_argument("--real_dataset",
                         help="Path to .pickle file with ecg data from prepare_data script",
@@ -36,18 +34,18 @@ def get_argument_parser():
     parser.add_argument("--lead_n", default=12, type=int)
     # general params
     parser.add_argument("--device",
-                        default=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-    parser.add_argument("--n_epochs", default=100, type=int)
-    parser.add_argument("--batch_size", default=24, type=int)
-    parser.add_argument("--lr", default=1e-4, type=float)
+                        default=torch.device('cuda:0' if torch.cuda.is_available() else 'cpu'))
+    parser.add_argument("--n_epochs", default=1000, type=int)
+    parser.add_argument("--batch_size", default=128, type=int)
+    parser.add_argument("--lr", default=0.00005, type=float)
     # generator params
     parser.add_argument("--gen_h_dim", default=256, type=int)
     parser.add_argument("--gen_l_dim", default=100, type=int)
     # discriminator params
-    parser.add_argument("--dis_h_dim", default=256, type=int)
+    parser.add_argument("--dis_h_dim", default=100, type=int)
 #     parser.add_argument("--dis_encoder_h_dim", default=128, type=int)
     parser.add_argument("--continue_from", default=None, type=str)
-    parser.add_argument("--seq_len", default=500, type=int)
+    parser.add_argument("--seq_len", default=1500, type=int)
     return parser
 
 
