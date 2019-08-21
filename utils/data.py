@@ -1,9 +1,82 @@
+# -*- coding: utf-8 -*-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
+
+
+class ECGRecord:
+    """
+    class for parsing ecg in .csv format 
+    with the following fields:
+    lead_system: ...
+    sampling_freq (Hz): ...
+    min_significant_discharge (μV): ...
+    patient_gender: ...
+    patient_birth_date: ...
+    ecg_signal: ...
+    """
+    lead_system = None
+    sampling_freq = None
+    min_significant_discharge = None
+    patient_gender = None
+    patient_birth_date = None
+    ecg_signal = None
+    def __init__(self, filepath:str):
+        self.parse_header_info(filepath) 
+        self.extract_ecg_signal(filepath)
+    
+    def parse_header_info(self, filepath:str):
+        """
+        parsing header info and save it in related fields
+        """
+        header_dict = dict([(it.split(":")[0].strip(), it.split(":")[1].strip()) 
+                            for it in  open(filepath).read().split("\n")[:5]])
+        self.lead_system = header_dict['Система отведений']
+        self.sampling_freq = header_dict['Частота дискретизации (Гц)']
+        self.min_significant_discharge = header_dict['Минимально значимый разряд (мкв)']
+        self.patient_gender = header_dict['Пациент пол']
+        self.patient_birth_date = header_dict['Пациент дата рождения (YYYYMMDD)']
+    def extract_ecg_signal(self, filepath:str):
+        """
+        parsing ecg signal 
+        """
+        _data = [[int(i) if i.replace("-", "").isnumeric() else i for i in it.split(",")] 
+                 for it in open(filepath).read().split("\n")[6:]]
+#         _data
+#         print(_data[:10])
+        self.ecg_signal = pd.DataFrame(_data[1:-1], columns=_data[0],)
+        # scaling to [-1, 1]
+        self.ecg_signal = 2 * (self.ecg_signal - self.ecg_signal.min()) / (
+                            self.ecg_signal.max() - self.ecg_signal.min()) - 1
+        if self.ecg_signal.shape != self.ecg_signal.dropna().shape:
+            print("Bad ECG file: " + filepath)
+            self.ecg_signal = None
+        del _data
+
+
+class UnlabeledECGDataset(Dataset):
+    """
+    ECG dataset wrapper without labels
+    """
+    def __init__(self, ecg_record_list: list, device='cpu', seq_len=5000):
+        self.dataset = ecg_record_list
+        self.device = device
+        self.seq_len = seq_len
+    
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        return self.transform(self.dataset[idx])
+    
+    def transform(self, sample):
+        result = torch.Tensor(sample.ecg_signal.values)
+        if result.size(0) >= self.seq_len:
+            result = result.unfold(0, self.seq_len, self.seq_len)[0].transpose(1, 0)
+        return result
 
 
 class ECGDataset(Dataset):

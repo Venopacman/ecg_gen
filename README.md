@@ -17,7 +17,11 @@ python setup.py install
 
 ```
 
-# Gan training
-```
-make train_gan 
-```
+# Research plan 
+- [x] Find data
+- [ ] Find architecture capable for generation ecg-like structures
+- [ ] Develop GAN for short 1-lead ecg generation
+- [ ] Develop GAN for medium 1-lead ecg generation
+- [ ] Develop GAN for long 1-lead ecg generation
+- [ ] Develop GAN fro short n-lead ecg generation
+- [ ] Plan further work
