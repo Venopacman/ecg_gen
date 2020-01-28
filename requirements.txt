@@ -9,4 +9,4 @@ torchvision==0.2.2.post3
 tqdm==4.31.1
 tb-nightly==1.14.0a20190512
 future==0.17.1
-tensorflow==1.15.0
+tensorflow==1.15.2
